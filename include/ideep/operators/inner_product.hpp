@@ -1,6 +1,12 @@
 #ifndef IDEEP_OPERATORS_INNER_PRODUCT_HPP
 #define IDEEP_OPERATORS_INNER_PRODUCT_HPP
 
+#include "sgx_urts.h"
+#include "sgx_error.h"
+#include "sgx_eid.h"
+#include "Enclave_u.h"
+#include <unistd.h>
+
 namespace ideep {
 
 struct inner_product_forward : public dnnl::inner_product_forward {
@@ -11,6 +17,7 @@ struct inner_product_forward : public dnnl::inner_product_forward {
                       const tensor& weights,
                       const tensor& bias,
                       tensor& dst,
+		      sgx_enclave_id_t *eid = NULL,
                       const scale_t& src_scales = scale_t(),
                       const scale_t& weights_scales = scale_t(),
                       const scale_t& dst_scales = scale_t(),
@@ -18,7 +25,7 @@ struct inner_product_forward : public dnnl::inner_product_forward {
                       const prop_kind aprop_kind = prop_kind::forward,
                       const lowp_kind alowp_kind = u8s8,
                       const engine& aengine = engine::cpu_engine()) {
-    compute_impl</*with_bias=*/true>(src, weights, bias, dst, src_scales,
+    compute_impl</*with_bias=*/true>(src, weights, bias, dst, eid, src_scales,
                                      weights_scales, dst_scales, attr,
                                      aprop_kind, alowp_kind, aengine);
   }
@@ -26,6 +33,7 @@ struct inner_product_forward : public dnnl::inner_product_forward {
   static void compute(const tensor& src,
                       const tensor& weights,
                       tensor& dst,
+		      sgx_enclave_id_t *eid = NULL,
                       const scale_t& src_scales = scale_t(),
                       const scale_t& weights_scales = scale_t(),
                       const scale_t& dst_scales = scale_t(),
@@ -34,7 +42,7 @@ struct inner_product_forward : public dnnl::inner_product_forward {
                       const lowp_kind alowp_kind = u8s8,
                       const engine& aengine = engine::cpu_engine()) {
     static tensor dummy_bias;
-    compute_impl</*with_bias=*/false>(src, weights, dummy_bias, dst, src_scales,
+    compute_impl</*with_bias=*/false>(src, weights, dummy_bias, dst, eid, src_scales,
                                       weights_scales, dst_scales, attr,
                                       aprop_kind, alowp_kind, aengine);
   }
@@ -69,6 +77,7 @@ private:
                            const tensor& weights,
                            const tensor& bias,
                            tensor& dst,
+			   sgx_enclave_id_t *eid,
                            const scale_t& src_scales,
                            const scale_t& weights_scales,
                            const scale_t& dst_scales,
@@ -84,7 +93,7 @@ private:
       new_dims[0] = src.get_dim(0);
       src_.reshape(new_dims);
     }
-    compute_impl_<with_bias>(src_, weights, bias, dst, src_scales,
+    compute_impl_<with_bias>(src_, weights, bias, dst, eid, src_scales,
                              weights_scales, dst_scales, attr, aprop_kind,
                              alowp_kind, aengine);
   }
@@ -94,6 +103,7 @@ private:
                             const tensor& weights,
                             const tensor& bias,
                             tensor& dst,
+			    sgx_enclave_id_t *eid,
                             const scale_t& src_scales,
                             const scale_t& weights_scales,
                             const scale_t& dst_scales,
@@ -207,19 +217,53 @@ private:
       dst.set_scale(dst_scales_in);
     }
 
-    if (with_bias){
-      auto expected_bias = bias.reorder_if_differ_in(pd.bias_desc(), bias_attr);
-      super(pd).execute(stream::default_stream(),
-                        {{DNNL_ARG_SRC, expected_src},
-                         {DNNL_ARG_WEIGHTS, expected_weights},
-                         {DNNL_ARG_BIAS, expected_bias},
-                         {DNNL_ARG_DST, dst}});
-    } else {
-      super(pd).execute(stream::default_stream(),
-                        {{DNNL_ARG_SRC, expected_src},
-                         {DNNL_ARG_WEIGHTS, expected_weights},
-                         {DNNL_ARG_DST, dst}});
+
+    auto src_desc_query = src_desc.to_format_any();
+    auto weights_desc_query = weights_desc.to_format_any();
+    auto bias_desc_query = with_bias ? bias_desc.to_format_any() : tensor::desc();
+    auto dst_desc_query = dst_desc.to_format_any();
+
+    auto inner_product_desc = dnnl::inner_product_forward::desc(aprop_kind,
+            src_desc_query, weights_desc_query,
+            bias_desc_query, dst_desc_query);
+
+    void* void_inner_product_desc = (void*)&inner_product_desc;
+    size_t inner_product_desc_size = sizeof(inner_product_desc);
+
+    auto src_handle = src.get_data_handle();
+    size_t src_data_size = src.get_desc().get_size();
+
+    auto inner_product_pri_desc = dnnl::inner_product_forward::desc(aprop_kind,
+            src.get_desc(), weights.get_desc(),
+            bias.get_desc(), dst_desc_query);
+
+    void* void_inner_product_pri_desc = (void*)&inner_product_pri_desc;
+    size_t inner_product_pri_size = sizeof(inner_product_pri_desc);
+
+    auto weight_handle = weights.get_data_handle();
+    size_t weight_data_size = weights.get_desc().get_size();
+    auto bias_handle = bias.get_data_handle();
+    size_t bias_data_size = bias.get_desc().get_size();
+
+    float *bias_data = (float *)(bias.get_data_handle());
+    float bias_float = bias_data[0];
+
+    void* void_dst = (void*)(dst.get_data_handle());
+    size_t dst_data_size = dst.get_desc().get_size();
+
+    if (eid == NULL)
+	    return;
+
+    if (*eid == 0) {
+        if (initialize_enclave(eid) < 0) {
+            printf("initialize enclave failed... \n");
+            return;
+        }
+        printf("inner product initialize enclave success: eid is %d.\n", *eid);
     }
+
+    int retval = -1;
+    sgx_status_t ret = ecall_inner_product_dnnl_function(*eid, &retval, void_inner_product_desc, inner_product_desc_size, src_handle, src_data_size, void_inner_product_pri_desc, inner_product_pri_size, weight_handle, weight_data_size, bias_float, bias_handle, bias_data_size, void_dst, dst_data_size);
 
     if (attr.non_negitive_output() && dst.get_data_type() == data_type::s8) {
       dst.to_type(data_type::u8);

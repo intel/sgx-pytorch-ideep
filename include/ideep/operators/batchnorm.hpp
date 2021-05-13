@@ -2,6 +2,12 @@
 #define IDEEP_OPERATORS_BATCHNORM_HPP
 #include "sum.hpp"
 
+#include "sgx_urts.h"
+#include "sgx_error.h"
+#include "sgx_eid.h"
+#include "Enclave_u.h"
+#include <unistd.h>
+
 namespace ideep {
 
 struct batch_normalization_forward_inference
@@ -17,7 +23,7 @@ struct batch_normalization_forward_inference
                       const engine& aengine = engine::cpu_engine()) {
     static tensor dummy;
     compute_impl</*use_stats=*/false>(
-        src, dummy, dummy, scale, shift, dst, epsilon, aengine);
+        src, dummy, dummy, scale, shift, dst, epsilon, NULL, aengine);
   }
 
   static void compute(const tensor& src,
@@ -27,9 +33,10 @@ struct batch_normalization_forward_inference
                       const tensor& shift,
                       tensor& dst,
                       float epsilon,
+		      sgx_enclave_id_t *eid = NULL,
                       const engine& aengine = engine::cpu_engine()) {
     compute_impl</*use_stats=*/true>(
-        src, mean, variance, scale, shift, dst, epsilon, aengine);
+        src, mean, variance, scale, shift, dst, epsilon, eid, aengine);
   }
  private:
   template <bool use_stats>
@@ -40,6 +47,7 @@ struct batch_normalization_forward_inference
                            const tensor& shift,
                            tensor& dst,
                            float epsilon,
+			   sgx_enclave_id_t *eid,
                            const engine& aengine) {
     auto flags = batch_normalization_flag::use_scale_shift;
     if (use_stats)
@@ -60,21 +68,38 @@ struct batch_normalization_forward_inference
     auto expected_src = src.reorder_if_differ_in(pd.src_desc());
     dst.reinit_if_possible(pd.dst_desc());
 
-    if (use_stats) {
-      auto expected_mean = mean.reorder_if_differ_in(pd.mean_desc());
-      auto expected_var = variance.reorder_if_differ_in(pd.variance_desc());
-      super(pd).execute(stream::default_stream(),
-                        {{DNNL_ARG_SRC, expected_src},
-                         {DNNL_ARG_SCALE_SHIFT, scale_shift},
-                         {DNNL_ARG_VARIANCE, expected_var},
-                         {DNNL_ARG_MEAN, expected_mean},
-                         {DNNL_ARG_DST, dst}});
-    } else {
-      super(pd).execute(stream::default_stream(),
-                        {{DNNL_ARG_SRC, expected_src},
-                         {DNNL_ARG_SCALE_SHIFT, scale_shift},
-                         {DNNL_ARG_DST, dst}});
+
+    auto bn_src_handle = src.get_data_handle();
+    auto bn_var_handle = variance.get_data_handle();
+    auto bn_mean_handle = mean.get_data_handle();
+    auto bn_scale_shift_handle = scale_shift.get_data_handle();
+
+    size_t bn_src_size = src.get_size();
+    size_t bn_var_size = variance.get_size();
+    size_t bn_mean_size = mean.get_size();
+    size_t bn_scale_shift_size = scale_shift.get_size();
+
+    void* void_dst = (void*)(dst.get_data_handle());
+    size_t dst_data_size = dst.get_desc().get_size();
+
+    auto bn_pd = dnnl::batch_normalization_forward::desc(prop_kind::forward_inference, pd.src_desc(), epsilon, flags);
+    void* void_bn_pd = (void*)&bn_pd;
+    size_t bn_pd_size = sizeof(bn_pd);
+
+    if (eid == NULL)
+            return;
+
+    if (*eid == 0) {
+        if (initialize_enclave(eid) < 0) {
+            printf("initialize enclave failed... \n");
+            return;
+        }
+        printf("batch norm initialize enclave success: eid is %d.\n", *eid);
     }
+
+    int retval = -1;
+    sgx_status_t ret = ecall_batch_norm_dnnl_function(*eid, &retval, void_bn_pd, bn_pd_size, bn_src_handle, bn_src_size, bn_var_handle, bn_var_size, bn_mean_handle, bn_mean_size, bn_scale_shift_handle, bn_scale_shift_size, void_dst, dst_data_size);
+
   }
 };
 

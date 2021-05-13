@@ -1,7 +1,15 @@
 #ifndef IDEEP_OPERATORS_CONV_HPP
 #define IDEEP_OPERATORS_CONV_HPP
 
+#include "sgx_urts.h"
+#include "sgx_error.h"
+#include "sgx_eid.h"
+#include "Enclave_u.h"
+#include <unistd.h>
+
 namespace ideep {
+
+//namespace ideep {
 
 struct convolution_forward_params {
   dnnl::convolution_forward::primitive_desc pd;
@@ -29,6 +37,7 @@ struct convolution_forward : public dnnl::convolution_forward {
       const dims& padding_l,
       const dims& padding_r,
       int groups,
+      sgx_enclave_id_t *eid = NULL,
       const scale_t& src_scales = scale_t(),
       const scale_t& weights_scales = scale_t(),
       const scale_t& dst_scales = scale_t(),
@@ -39,7 +48,7 @@ struct convolution_forward : public dnnl::convolution_forward {
       const engine& aengine = engine::cpu_engine()) {
     do_prepare</*with_bias=*/true>(
         param, src, weights, bias, dst_dims, dst, strides, dilates,
-        padding_l, padding_r, groups, src_scales, weights_scales, dst_scales,
+        padding_l, padding_r, groups, eid, src_scales, weights_scales, dst_scales,
         attr, aalgorithm, aprop_kind, alowp_kind, aengine);
   }
 
@@ -55,6 +64,7 @@ struct convolution_forward : public dnnl::convolution_forward {
       const dims& padding_l,
       const dims& padding_r,
       int groups,
+      sgx_enclave_id_t *eid = NULL,
       const scale_t& src_scales = scale_t(),
       const scale_t& weights_scales = scale_t(),
       const scale_t& dst_scales = scale_t(),
@@ -66,7 +76,7 @@ struct convolution_forward : public dnnl::convolution_forward {
     static tensor dummy_bias;
     do_prepare</*with_bias=*/false>(
         param, src, weights, dummy_bias, dst_dims, dst, strides, dilates,
-        padding_l, padding_r, groups, src_scales, weights_scales, dst_scales,
+        padding_l, padding_r, groups, eid, src_scales, weights_scales, dst_scales,
         attr, aalgorithm, aprop_kind, alowp_kind, aengine);
   }
 
@@ -99,6 +109,7 @@ struct convolution_forward : public dnnl::convolution_forward {
                       const dims& padding_l,
                       const dims& padding_r,
                       int groups,
+		      sgx_enclave_id_t *eid = NULL,
                       const scale_t& src_scales = scale_t(),
                       const scale_t& weights_scales = scale_t(),
                       const scale_t& dst_scales = scale_t(),
@@ -110,9 +121,9 @@ struct convolution_forward : public dnnl::convolution_forward {
     convolution_forward_params params;
     do_prepare</*with_bias=*/true>(
         params, src, weights, bias, dst_dims, dst, strides, dilates, 
-        padding_l, padding_r, groups, src_scales, weights_scales, dst_scales,
+        padding_l, padding_r, groups, eid, src_scales, weights_scales, dst_scales,
         attr, aalgorithm, aprop_kind, alowp_kind, aengine);
-    do_compute</*with_bias=*/true>(params, src, weights, bias, dst);
+    //do_compute</*with_bias=*/true>(params, src, weights, bias, dst);
   }
 
   // 2-in-1 compute (prepare & compute) without bias
@@ -125,6 +136,7 @@ struct convolution_forward : public dnnl::convolution_forward {
                       const dims& padding_l,
                       const dims& padding_r,
                       int groups,
+		      sgx_enclave_id_t *eid = NULL,
                       const scale_t& src_scales = scale_t(),
                       const scale_t& weights_scales = scale_t(),
                       const scale_t& dst_scales = scale_t(),
@@ -137,9 +149,9 @@ struct convolution_forward : public dnnl::convolution_forward {
     convolution_forward_params params;
     do_prepare</*with_bias=*/false>(
         params, src, weights, dummy_bias, dst_dims, dst, strides, dilates, 
-        padding_l, padding_r, groups, src_scales, weights_scales, dst_scales,
+        padding_l, padding_r, groups, eid, src_scales, weights_scales, dst_scales,
         attr, aalgorithm, aprop_kind, alowp_kind, aengine);
-    do_compute</*with_bias=*/false>(params, src, weights, dummy_bias, dst);
+    //do_compute</*with_bias=*/false>(params, src, weights, dummy_bias, dst);
   }
 
   static tensor::desc expected_weights_desc(
@@ -262,6 +274,7 @@ private:
       const dims& padding_l,
       const dims& padding_r,
       int groups,
+      sgx_enclave_id_t *eid,
       const scale_t& src_scales,
       const scale_t& weights_scales,
       const scale_t& dst_scales,
@@ -378,6 +391,80 @@ private:
     auto pd = get_primitive_desc<with_bias>(
         src_desc, weights_desc, bias_desc, dst_desc, strides, dilates_,
         padding_l, padding_r, op_attr, aalgorithm, aprop_kind, aengine);
+
+
+///////////////////////////////////////////////
+
+    dnnl::post_ops op2 = op_attr.get_post_ops();
+
+    auto src_desc_query = src_desc.to_format_any();
+    auto weights_desc_query = weights_desc.to_format_any();
+    auto bias_desc_query = with_bias ? bias_desc.to_format_any() : tensor::desc();
+    auto dst_desc_query = dst_desc.to_format_any();
+
+    auto conv_desc = dnnl::convolution_forward::desc(aprop_kind,
+            aalgorithm, pd.src_desc(), pd.weights_desc(),
+            bias_desc_query, pd.dst_desc(), strides, dilates_, padding_l,
+            padding_r);
+
+    void* void_conv_desc = (void*)&conv_desc;
+    size_t conv_desc_size = sizeof(conv_desc);
+    void* void_op_attr = (void*)&op2;
+
+    dst.reinit_if_possible(pd.dst_desc());
+
+    dnnl::convolution_forward::desc* conv_desc_mem = (dnnl::convolution_forward::desc*)void_conv_desc;
+    dnnl::primitive_attr conv_attr_mem;
+    dnnl::post_ops* ops = (dnnl::post_ops*)void_op_attr;
+    conv_attr_mem.set_post_ops(*ops);
+    conv_attr_mem.set_scratchpad_mode(dnnl::scratchpad_mode::user);
+
+    auto conv_desc_pri = dnnl::convolution_forward::desc(aprop_kind,
+                aalgorithm, src.get_desc(), weights.get_desc(),
+                bias_desc_query, dst.get_desc(), strides, dilates_, padding_l,
+                padding_r);
+
+    if (with_bias) {
+        conv_desc_pri = dnnl::convolution_forward::desc(aprop_kind,
+                aalgorithm, src.get_desc(), weights.get_desc(),
+                bias.get_desc(), dst.get_desc(), strides, dilates_, padding_l,
+                padding_r);
+    }
+    size_t conv_desc_pri_size = sizeof(conv_desc_pri);
+
+    auto src_handle = src.get_data_handle();
+    size_t src_data_size = src.get_desc().get_size();
+    auto weight_handle = weights.get_data_handle();
+    size_t weight_data_size = weights.get_desc().get_size();
+    auto bias_handle = bias.get_data_handle();
+    size_t bias_data_size = with_bias ? bias.get_desc().get_size() : 0;
+
+    auto pass_scratchpad_desc = pd.scratchpad_desc();
+    void* void_scratchpad_desc = (void*)&pass_scratchpad_desc;
+
+    void* void_conv_desc_pri = (void*)&conv_desc_pri;
+    //void* void_bias = (void*)bias_handle;
+    void* void_dst = (void*)(dst.get_data_handle());
+    size_t dst_data_size = dst.get_desc().get_size();
+
+
+    if (eid == NULL) return;
+    if (*eid == 0) {
+         if (initialize_enclave(eid) < 0) {
+            printf("initialize enclave failed... \n");
+            return;
+        }
+        printf("conv initialize enclave success: *eid is %d.\n", *eid);
+
+    }
+
+    sgx_status_t retval;
+    sgx_status_t ret = ecall_conv_dnnl_function(*eid, &retval, void_conv_desc, conv_desc_size, void_op_attr, src_handle, src_data_size, void_conv_desc_pri, conv_desc_pri_size, weight_handle, weight_data_size, with_bias?1:0, bias_handle, bias_data_size, void_dst, dst_data_size);
+
+    if (ret)
+        printf("ecall_conv_dnnl_function ret is %d.\n", ret);
+
+    ///////////////////////////////////////////////////////////////////
 
     // allocate scratchpad
     tensor scratchpad(pd.scratchpad_desc());

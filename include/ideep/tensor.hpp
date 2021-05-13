@@ -3,6 +3,7 @@
 
 #include "attributes.hpp"
 #include "utils.hpp"
+#include "enclave.hpp"
 
 namespace ideep {
 
