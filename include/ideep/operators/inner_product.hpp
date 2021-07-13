@@ -17,6 +17,10 @@ struct inner_product_forward : public dnnl::inner_product_forward {
                       const tensor& weights,
                       const tensor& bias,
                       tensor& dst,
+		      void* weight_iv_mac = NULL,
+		      size_t weight_meta_size = 0,
+		      void* bias_iv_mac = NULL,
+		      size_t bias_meta_size = 0,
 		      sgx_enclave_id_t *eid = NULL,
                       const scale_t& src_scales = scale_t(),
                       const scale_t& weights_scales = scale_t(),
@@ -25,7 +29,7 @@ struct inner_product_forward : public dnnl::inner_product_forward {
                       const prop_kind aprop_kind = prop_kind::forward,
                       const lowp_kind alowp_kind = u8s8,
                       const engine& aengine = engine::cpu_engine()) {
-    compute_impl</*with_bias=*/true>(src, weights, bias, dst, eid, src_scales,
+    compute_impl</*with_bias=*/true>(src, weights, bias, dst, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, eid, src_scales,
                                      weights_scales, dst_scales, attr,
                                      aprop_kind, alowp_kind, aengine);
   }
@@ -33,6 +37,8 @@ struct inner_product_forward : public dnnl::inner_product_forward {
   static void compute(const tensor& src,
                       const tensor& weights,
                       tensor& dst,
+                      void* weight_iv_mac = NULL,
+                      size_t weight_meta_size = 0,
 		      sgx_enclave_id_t *eid = NULL,
                       const scale_t& src_scales = scale_t(),
                       const scale_t& weights_scales = scale_t(),
@@ -42,7 +48,9 @@ struct inner_product_forward : public dnnl::inner_product_forward {
                       const lowp_kind alowp_kind = u8s8,
                       const engine& aengine = engine::cpu_engine()) {
     static tensor dummy_bias;
-    compute_impl</*with_bias=*/false>(src, weights, dummy_bias, dst, eid, src_scales,
+    void* bias_iv_mac = NULL;
+    size_t bias_meta_size = 0;
+    compute_impl</*with_bias=*/false>(src, weights, dummy_bias, dst, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, eid, src_scales,
                                       weights_scales, dst_scales, attr,
                                       aprop_kind, alowp_kind, aengine);
   }
@@ -77,6 +85,10 @@ private:
                            const tensor& weights,
                            const tensor& bias,
                            tensor& dst,
+                           void* weight_iv_mac,
+                           size_t weight_meta_size,
+                           void* bias_iv_mac,
+                           size_t bias_meta_size,
 			   sgx_enclave_id_t *eid,
                            const scale_t& src_scales,
                            const scale_t& weights_scales,
@@ -93,7 +105,7 @@ private:
       new_dims[0] = src.get_dim(0);
       src_.reshape(new_dims);
     }
-    compute_impl_<with_bias>(src_, weights, bias, dst, eid, src_scales,
+    compute_impl_<with_bias>(src_, weights, bias, dst, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, eid, src_scales,
                              weights_scales, dst_scales, attr, aprop_kind,
                              alowp_kind, aengine);
   }
@@ -103,6 +115,10 @@ private:
                             const tensor& weights,
                             const tensor& bias,
                             tensor& dst,
+                            void* weight_iv_mac,
+                            size_t weight_meta_size,
+                            void* bias_iv_mac,
+                            size_t bias_meta_size,
 			    sgx_enclave_id_t *eid,
                             const scale_t& src_scales,
                             const scale_t& weights_scales,
@@ -217,7 +233,14 @@ private:
       dst.set_scale(dst_scales_in);
     }
 
-
+    if (weight_iv_mac and bias_iv_mac) {
+    printf("compute with bias, get weight_meta_size: %d, get bias_meta_size: %d\n", weight_meta_size, bias_meta_size);
+    for (int i=0; i<28; i++)
+        printf("%X ", *((uint8_t*)weight_iv_mac+i));
+    printf("\n");
+    for (int i=0; i<28; i++)
+        printf("%X ", *((uint8_t*)bias_iv_mac+i));
+    printf("\n");
     auto src_desc_query = src_desc.to_format_any();
     auto weights_desc_query = weights_desc.to_format_any();
     auto bias_desc_query = with_bias ? bias_desc.to_format_any() : tensor::desc();
@@ -262,8 +285,26 @@ private:
         printf("inner product initialize enclave success: eid is %d.\n", *eid);
     }
 
-    int retval = -1;
-    sgx_status_t ret = ecall_inner_product_dnnl_function(*eid, &retval, void_inner_product_desc, inner_product_desc_size, src_handle, src_data_size, void_inner_product_pri_desc, inner_product_pri_size, weight_handle, weight_data_size, bias_float, bias_handle, bias_data_size, void_dst, dst_data_size);
+    sgx_status_t retval;
+    sgx_status_t ret = ecall_inner_product_dnnl_function(*eid, &retval, void_inner_product_desc, inner_product_desc_size, src_handle, src_data_size, void_inner_product_pri_desc, inner_product_pri_size, weight_handle, weight_data_size, with_bias?1:0, bias_handle, bias_data_size, void_dst, dst_data_size, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size);
+    }//if weight_iv_mac and bias_iv_mac
+    else {
+    if (with_bias){
+      printf("call in mkldnn inner product with bias");
+      auto expected_bias = bias.reorder_if_differ_in(pd.bias_desc(), bias_attr);
+      super(pd).execute(stream::default_stream(),
+                        {{DNNL_ARG_SRC, expected_src},
+                         {DNNL_ARG_WEIGHTS, expected_weights},
+                         {DNNL_ARG_BIAS, expected_bias},
+                         {DNNL_ARG_DST, dst}});
+    } else {
+      printf("call in mkldnn inner product without bias");
+      super(pd).execute(stream::default_stream(),
+                        {{DNNL_ARG_SRC, expected_src},
+                         {DNNL_ARG_WEIGHTS, expected_weights},
+                         {DNNL_ARG_DST, dst}});
+    }
+    }//if weight_iv_mac and bias_iv_mac else 
 
     if (attr.non_negitive_output() && dst.get_data_type() == data_type::s8) {
       dst.to_type(data_type::u8);

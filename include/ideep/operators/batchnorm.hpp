@@ -23,7 +23,7 @@ struct batch_normalization_forward_inference
                       const engine& aengine = engine::cpu_engine()) {
     static tensor dummy;
     compute_impl</*use_stats=*/false>(
-        src, dummy, dummy, scale, shift, dst, epsilon, NULL, aengine);
+        src, dummy, dummy, scale, shift, dst, epsilon, NULL, 0, NULL, 0, NULL, aengine);
   }
 
   static void compute(const tensor& src,
@@ -33,10 +33,18 @@ struct batch_normalization_forward_inference
                       const tensor& shift,
                       tensor& dst,
                       float epsilon,
+		      void* weight_iv_mac = NULL,
+		      size_t weight_meta_size = 0,
+		      void* bias_iv_mac = NULL,
+		      size_t bias_meta_size = 0,
 		      sgx_enclave_id_t *eid = NULL,
                       const engine& aengine = engine::cpu_engine()) {
+    //printf("get weight %d\n", weight_iv_mac ? 1 : 0);
+    //for (int i=0; i<28; i++)
+    //    printf("%X ", *((uint8_t*)weight_iv_mac+i));
+    //printf("\n");
     compute_impl</*use_stats=*/true>(
-        src, mean, variance, scale, shift, dst, epsilon, eid, aengine);
+        src, mean, variance, scale, shift, dst, epsilon, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, eid, aengine);
   }
  private:
   template <bool use_stats>
@@ -47,6 +55,10 @@ struct batch_normalization_forward_inference
                            const tensor& shift,
                            tensor& dst,
                            float epsilon,
+			   void* weight_iv_mac,
+			   size_t weight_meta_size,
+			   void* bias_iv_mac,
+			   size_t bias_meta_size,
 			   sgx_enclave_id_t *eid,
                            const engine& aengine) {
     auto flags = batch_normalization_flag::use_scale_shift;
@@ -68,7 +80,10 @@ struct batch_normalization_forward_inference
     auto expected_src = src.reorder_if_differ_in(pd.src_desc());
     dst.reinit_if_possible(pd.dst_desc());
 
-
+    //printf("get weight %d\n", weight_iv_mac ? 1 : 0);
+    //printf("get bias %d\n", bias_iv_mac ? 1 : 0);
+    //printf("eid %d\n", *eid);
+    if (weight_iv_mac and bias_iv_mac) {
     auto bn_src_handle = src.get_data_handle();
     auto bn_var_handle = variance.get_data_handle();
     auto bn_mean_handle = mean.get_data_handle();
@@ -97,8 +112,40 @@ struct batch_normalization_forward_inference
         printf("batch norm initialize enclave success: eid is %d.\n", *eid);
     }
 
-    int retval = -1;
-    sgx_status_t ret = ecall_batch_norm_dnnl_function(*eid, &retval, void_bn_pd, bn_pd_size, bn_src_handle, bn_src_size, bn_var_handle, bn_var_size, bn_mean_handle, bn_mean_size, bn_scale_shift_handle, bn_scale_shift_size, void_dst, dst_data_size);
+    sgx_status_t retval;
+    sgx_status_t ret = ecall_batch_norm_dnnl_function(*eid, &retval, void_bn_pd, bn_pd_size, bn_src_handle, bn_src_size, bn_var_handle, bn_var_size, bn_mean_handle, bn_mean_size, bn_scale_shift_handle, bn_scale_shift_size, scale.get_size(), shift.get_size(), void_dst, dst_data_size, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size);
+    }
+    else{
+    if (use_stats) {
+//      std::cout << "use_state true and in compute_impl" << std::endl;
+      auto expected_mean = mean.reorder_if_differ_in(pd.mean_desc());
+      if (pd.mean_desc() != mean.get_desc()){
+          std::cout << "mean not equal" <<std::endl;
+      }
+      else {
+          std::cout << "mean equal" <<std::endl;
+      }
+      auto expected_var = variance.reorder_if_differ_in(pd.variance_desc());
+      if (pd.variance_desc() != variance.get_desc()){
+          std::cout << "var not equal" <<std::endl;
+      }
+      else {
+          std::cout << "var equal" <<std::endl;
+      }
+      super(pd).execute(stream::default_stream(),
+                        {{DNNL_ARG_SRC, expected_src},
+                         {DNNL_ARG_SCALE_SHIFT, scale_shift},
+                         {DNNL_ARG_VARIANCE, expected_var},
+                         {DNNL_ARG_MEAN, expected_mean},
+                         {DNNL_ARG_DST, dst}});
+    } else {
+//      std::cout << "use_state false and in compute_impl" << std::endl;
+      super(pd).execute(stream::default_stream(),
+                        {{DNNL_ARG_SRC, expected_src},
+                         {DNNL_ARG_SCALE_SHIFT, scale_shift},
+                         {DNNL_ARG_DST, dst}});
+    }
+    }// if weight_iv_mac and bias_iv_mac
 
   }
 };
