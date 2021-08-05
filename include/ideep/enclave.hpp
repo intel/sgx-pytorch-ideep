@@ -4,7 +4,7 @@
 #include "sgx_urts.h"
 #include "sgx_error.h"
 #include "sgx_eid.h"
-#define ENCLAVE_FILENAME "/home/hy/libenclave.signed.so"
+#include "Enclave_u.h"
 
 
 typedef struct _sgx_errlist_t {
@@ -25,8 +25,12 @@ static int initialize_enclave(sgx_enclave_id_t* eid)
 {
     sgx_status_t ret = SGX_ERROR_UNEXPECTED;
 
+    std::string enclave_path = ENCLAVE_PATH;
+    printf("ENCLAVE_PATH is %s.\n", enclave_path.c_str());
+
     // Debug Support: set 2nd parameter to 1
-    ret = sgx_create_enclave(ENCLAVE_FILENAME, 1, NULL, NULL, eid, NULL);
+    ret = sgx_create_enclave(enclave_path.c_str(), 1, NULL, NULL, eid, NULL);
+
     if (ret != SGX_SUCCESS) {
         printf("sgx_create_enclave failed %d.\n", ret);
         return -1;

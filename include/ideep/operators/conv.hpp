@@ -1,10 +1,6 @@
 #ifndef IDEEP_OPERATORS_CONV_HPP
 #define IDEEP_OPERATORS_CONV_HPP
 
-#include "sgx_urts.h"
-#include "sgx_error.h"
-#include "sgx_eid.h"
-#include "Enclave_u.h"
 #include <unistd.h>
 
 namespace ideep {

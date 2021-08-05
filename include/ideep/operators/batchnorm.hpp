@@ -2,10 +2,6 @@
 #define IDEEP_OPERATORS_BATCHNORM_HPP
 #include "sum.hpp"
 
-#include "sgx_urts.h"
-#include "sgx_error.h"
-#include "sgx_eid.h"
-#include "Enclave_u.h"
 #include <unistd.h>
 
 namespace ideep {
@@ -119,19 +115,21 @@ struct batch_normalization_forward_inference
     if (use_stats) {
 //      std::cout << "use_state true and in compute_impl" << std::endl;
       auto expected_mean = mean.reorder_if_differ_in(pd.mean_desc());
-      if (pd.mean_desc() != mean.get_desc()){
+/*      if (pd.mean_desc() != mean.get_desc()){
           std::cout << "mean not equal" <<std::endl;
       }
       else {
           std::cout << "mean equal" <<std::endl;
       }
+*/
       auto expected_var = variance.reorder_if_differ_in(pd.variance_desc());
-      if (pd.variance_desc() != variance.get_desc()){
+/*      if (pd.variance_desc() != variance.get_desc()){
           std::cout << "var not equal" <<std::endl;
       }
       else {
           std::cout << "var equal" <<std::endl;
       }
+*/
       super(pd).execute(stream::default_stream(),
                         {{DNNL_ARG_SRC, expected_src},
                          {DNNL_ARG_SCALE_SHIFT, scale_shift},
