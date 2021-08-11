@@ -43,7 +43,7 @@ struct convolution_forward : public dnnl::convolution_forward {
       const engine& aengine = engine::cpu_engine()) {
     do_prepare</*with_bias=*/true>(
         param, src, weights, bias, dst_dims, dst, strides, dilates,
-        padding_l, padding_r, groups, NULL, 0, NULL, 0, NULL, src_scales, weights_scales, dst_scales,
+        padding_l, padding_r, groups, NULL, 0, NULL, 0, NULL, NULL, src_scales, weights_scales, dst_scales,
         attr, aalgorithm, aprop_kind, alowp_kind, aengine);
   }
 
@@ -70,7 +70,7 @@ struct convolution_forward : public dnnl::convolution_forward {
     static tensor dummy_bias;
     do_prepare</*with_bias=*/false>(
         param, src, weights, dummy_bias, dst_dims, dst, strides, dilates,
-        padding_l, padding_r, groups, NULL, 0, NULL, 0, NULL, src_scales, weights_scales, dst_scales,
+        padding_l, padding_r, groups, NULL, 0, NULL, 0, NULL, NULL, src_scales, weights_scales, dst_scales,
         attr, aalgorithm, aprop_kind, alowp_kind, aengine);
   }
 
@@ -107,6 +107,7 @@ struct convolution_forward : public dnnl::convolution_forward {
 		      size_t weight_meta_size = 0,
 		      void *bias_iv_mac = NULL,
 		      size_t bias_meta_size = 0,
+		      void *model_id = NULL,
 		      sgx_enclave_id_t *eid = NULL,
                       const scale_t& src_scales = scale_t(),
                       const scale_t& weights_scales = scale_t(),
@@ -122,7 +123,7 @@ struct convolution_forward : public dnnl::convolution_forward {
     //printf("get iv hex %X %X %X %X %X %X %X %X\n", *((uint8_t*)mac), *((uint8_t*)mac+1), *((uint8_t*)mac+2), *((uint8_t*)mac+3), *((uint8_t*)mac+4), *((uint8_t*)mac+5), *((uint8_t*)mac+6), *((uint8_t*)mac+7) );
     do_prepare</*with_bias=*/true>(
         params, src, weights, bias, dst_dims, dst, strides, dilates, 
-        padding_l, padding_r, groups, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, eid, src_scales, weights_scales, dst_scales,
+        padding_l, padding_r, groups, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, model_id, eid, src_scales, weights_scales, dst_scales,
         attr, aalgorithm, aprop_kind, alowp_kind, aengine);
     if (weight_iv_mac==NULL or bias_iv_mac==NULL) {
         do_compute</*with_bias=*/true>(params, src, weights, bias, dst);
@@ -143,6 +144,7 @@ struct convolution_forward : public dnnl::convolution_forward {
 		      size_t weight_meta_size = 0,
 		      void *bias_iv_mac = NULL,
 		      size_t bias_meta_size = 0,
+		      void *model_id = NULL,
 		      sgx_enclave_id_t *eid = NULL,
                       const scale_t& src_scales = scale_t(),
                       const scale_t& weights_scales = scale_t(),
@@ -157,7 +159,7 @@ struct convolution_forward : public dnnl::convolution_forward {
     printf("compute without bias, get iv size: %d, get mac size: %d\n", weight_meta_size, bias_meta_size);
     do_prepare</*with_bias=*/false>(
         params, src, weights, dummy_bias, dst_dims, dst, strides, dilates, 
-        padding_l, padding_r, groups, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, eid, src_scales, weights_scales, dst_scales,
+        padding_l, padding_r, groups, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, model_id, eid, src_scales, weights_scales, dst_scales,
         attr, aalgorithm, aprop_kind, alowp_kind, aengine);
     if (weight_iv_mac==NULL or bias_iv_mac==NULL) {
         do_compute</*with_bias=*/false>(params, src, weights, dummy_bias, dst);
@@ -288,6 +290,7 @@ private:
       size_t weight_meta_size,
       void *bias_iv_mac,
       size_t bias_meta_size,
+      void *model_id,
       sgx_enclave_id_t *eid,
       const scale_t& src_scales,
       const scale_t& weights_scales,
@@ -461,6 +464,7 @@ private:
     //void* void_bias = (void*)bias_handle;
     void* void_dst = (void*)(dst.get_data_handle());
     size_t dst_data_size = dst.get_desc().get_size();
+    uint32_t model_id_ = *((uint32_t*)model_id);
 
     //if (weight_iv_mac and bias_iv_mac) {
         if (eid == NULL) return;
@@ -475,7 +479,7 @@ private:
 
         sgx_status_t retval;
         //printf("weight_data_size : %d %d %d\n", weight_data_size, iv_size, mac_size);
-        sgx_status_t ret = ecall_conv_dnnl_function(*eid, &retval, void_conv_desc, conv_desc_size, void_op_attr, src_handle, src_data_size, void_conv_desc_pri, conv_desc_pri_size, weight_handle, weight_data_size, with_bias?1:0, bias_handle, bias_data_size, void_dst, dst_data_size, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size);
+        sgx_status_t ret = ecall_conv_dnnl_function(*eid, &retval, void_conv_desc, conv_desc_size, void_op_attr, src_handle, src_data_size, void_conv_desc_pri, conv_desc_pri_size, weight_handle, weight_data_size, with_bias?1:0, bias_handle, bias_data_size, void_dst, dst_data_size, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, model_id_);
 
         if (ret)
             printf("ecall_conv_dnnl_function ret is %d.\n", ret);

@@ -17,6 +17,7 @@ struct inner_product_forward : public dnnl::inner_product_forward {
 		      size_t weight_meta_size = 0,
 		      void* bias_iv_mac = NULL,
 		      size_t bias_meta_size = 0,
+		      void* model_id = NULL,
 		      sgx_enclave_id_t *eid = NULL,
                       const scale_t& src_scales = scale_t(),
                       const scale_t& weights_scales = scale_t(),
@@ -25,7 +26,7 @@ struct inner_product_forward : public dnnl::inner_product_forward {
                       const prop_kind aprop_kind = prop_kind::forward,
                       const lowp_kind alowp_kind = u8s8,
                       const engine& aengine = engine::cpu_engine()) {
-    compute_impl</*with_bias=*/true>(src, weights, bias, dst, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, eid, src_scales,
+    compute_impl</*with_bias=*/true>(src, weights, bias, dst, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, model_id, eid, src_scales,
                                      weights_scales, dst_scales, attr,
                                      aprop_kind, alowp_kind, aengine);
   }
@@ -35,6 +36,7 @@ struct inner_product_forward : public dnnl::inner_product_forward {
                       tensor& dst,
                       void* weight_iv_mac = NULL,
                       size_t weight_meta_size = 0,
+		      void* model_id = NULL,
 		      sgx_enclave_id_t *eid = NULL,
                       const scale_t& src_scales = scale_t(),
                       const scale_t& weights_scales = scale_t(),
@@ -46,7 +48,7 @@ struct inner_product_forward : public dnnl::inner_product_forward {
     static tensor dummy_bias;
     void* bias_iv_mac = NULL;
     size_t bias_meta_size = 0;
-    compute_impl</*with_bias=*/false>(src, weights, dummy_bias, dst, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, eid, src_scales,
+    compute_impl</*with_bias=*/false>(src, weights, dummy_bias, dst, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, model_id, eid, src_scales,
                                       weights_scales, dst_scales, attr,
                                       aprop_kind, alowp_kind, aengine);
   }
@@ -85,6 +87,7 @@ private:
                            size_t weight_meta_size,
                            void* bias_iv_mac,
                            size_t bias_meta_size,
+			   void* model_id,
 			   sgx_enclave_id_t *eid,
                            const scale_t& src_scales,
                            const scale_t& weights_scales,
@@ -101,7 +104,7 @@ private:
       new_dims[0] = src.get_dim(0);
       src_.reshape(new_dims);
     }
-    compute_impl_<with_bias>(src_, weights, bias, dst, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, eid, src_scales,
+    compute_impl_<with_bias>(src_, weights, bias, dst, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, model_id, eid, src_scales,
                              weights_scales, dst_scales, attr, aprop_kind,
                              alowp_kind, aengine);
   }
@@ -115,6 +118,7 @@ private:
                             size_t weight_meta_size,
                             void* bias_iv_mac,
                             size_t bias_meta_size,
+			    void* model_id,
 			    sgx_enclave_id_t *eid,
                             const scale_t& src_scales,
                             const scale_t& weights_scales,
@@ -270,6 +274,8 @@ private:
     void* void_dst = (void*)(dst.get_data_handle());
     size_t dst_data_size = dst.get_desc().get_size();
 
+    uint32_t model_id_ = *((uint32_t*)model_id);
+
     if (eid == NULL)
 	    return;
 
@@ -282,7 +288,7 @@ private:
     }
 
     sgx_status_t retval;
-    sgx_status_t ret = ecall_inner_product_dnnl_function(*eid, &retval, void_inner_product_desc, inner_product_desc_size, src_handle, src_data_size, void_inner_product_pri_desc, inner_product_pri_size, weight_handle, weight_data_size, with_bias?1:0, bias_handle, bias_data_size, void_dst, dst_data_size, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size);
+    sgx_status_t ret = ecall_inner_product_dnnl_function(*eid, &retval, void_inner_product_desc, inner_product_desc_size, src_handle, src_data_size, void_inner_product_pri_desc, inner_product_pri_size, weight_handle, weight_data_size, with_bias?1:0, bias_handle, bias_data_size, void_dst, dst_data_size, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, model_id_);
     }//if weight_iv_mac and bias_iv_mac
     else {
     if (with_bias){
