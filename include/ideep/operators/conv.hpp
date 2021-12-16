@@ -479,7 +479,7 @@ private:
 
         sgx_status_t retval;
         //printf("weight_data_size : %d %d %d\n", weight_data_size, iv_size, mac_size);
-        sgx_status_t ret = ecall_conv_dnnl_function(*eid, &retval, void_conv_desc, conv_desc_size, void_op_attr, src_handle, src_data_size, void_conv_desc_pri, conv_desc_pri_size, weight_handle, weight_data_size, with_bias?1:0, bias_handle, bias_data_size, void_dst, dst_data_size, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, model_id_);
+        sgx_status_t ret = ecall_conv_dnnl_function(*eid, &retval, void_conv_desc, conv_desc_size, src_handle, src_data_size, void_conv_desc_pri, conv_desc_pri_size, weight_handle, weight_data_size, with_bias?1:0, bias_handle, bias_data_size, void_dst, dst_data_size, weight_iv_mac, weight_meta_size, bias_iv_mac, bias_meta_size, model_id_);
 
         if (ret)
             printf("ecall_conv_dnnl_function ret is %d.\n", ret);
